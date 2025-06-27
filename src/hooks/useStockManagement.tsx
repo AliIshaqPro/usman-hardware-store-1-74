@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { stockManagementService, StockAlert, StockMovement, StockValidationResult } from '@/services/stockManagementService';
@@ -8,6 +7,56 @@ export const useStockManagement = () => {
   const [alerts, setAlerts] = useState<StockAlert[]>([]);
   const [movements, setMovements] = useState<StockMovement[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Handle order status changes with proper stock management
+  const handleOrderStatusChange = async (
+    orderId: number,
+    orderNumber: string,
+    orderItems: any[],
+    newStatus: string,
+    oldStatus: string
+  ) => {
+    try {
+      setLoading(true);
+      console.log(`Processing order status change: ${oldStatus} -> ${newStatus} for order ${orderNumber}`);
+      
+      const result = await stockManagementService.handleOrderStatusChange(
+        orderId,
+        orderNumber,
+        orderItems,
+        newStatus,
+        oldStatus
+      );
+
+      if (result.success) {
+        toast({
+          title: "Order Updated",
+          description: "Order status and stock updated successfully",
+        });
+        
+        // Refresh alerts after stock change
+        await refreshAlerts();
+      } else {
+        toast({
+          title: "Stock Update Failed",
+          description: result.message,
+          variant: "destructive"
+        });
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('Error handling order status change:', error);
+      toast({
+        title: "Error",
+        description: "Failed to update order status and stock",
+        variant: "destructive"
+      });
+      return { success: false, message: 'Error updating order status and stock' };
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Validate stock before operations
   const validateStock = async (productId: number, quantity: number): Promise<StockValidationResult> => {
@@ -214,6 +263,7 @@ export const useStockManagement = () => {
     loading,
     
     // Actions
+    handleOrderStatusChange,
     validateStock,
     deductStock,
     addStock,

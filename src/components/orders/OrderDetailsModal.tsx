@@ -13,6 +13,7 @@ import { User, Package, Calendar, DollarSign, RotateCcw, AlertTriangle, Minus, P
 import { useToast } from "@/hooks/use-toast";
 import { salesApi, customersApi } from "@/services/api";
 import { useCustomerBalance } from "@/hooks/useCustomerBalance";
+import { useStockManagement } from "@/hooks/useStockManagement";
 
 interface OrderDetailsModalProps {
   open: boolean;
@@ -24,6 +25,7 @@ interface OrderDetailsModalProps {
 export const OrderDetailsModal = ({ open, onOpenChange, order, onOrderUpdated }: OrderDetailsModalProps) => {
   const { toast } = useToast();
   const { updateBalanceForOrderStatusChange } = useCustomerBalance();
+  const { handleOrderStatusChange } = useStockManagement();
   const [showAdjustmentForm, setShowAdjustmentForm] = useState(false);
   const [adjustmentItems, setAdjustmentItems] = useState<any[]>([]);
   const [adjustmentNotes, setAdjustmentNotes] = useState("");
@@ -101,32 +103,56 @@ export const OrderDetailsModal = ({ open, onOpenChange, order, onOrderUpdated }:
       console.log('Order ID:', order.id);
       
       if (editMode === 'status') {
-        console.log('Updating status to:', editValues.status);
+        console.log('Updating status from', order.status, 'to:', editValues.status);
         
-        // Handle status changes with customer balance updates
-        if (order.customerId && editValues.status !== order.status) {
-          try {
-            await updateBalanceForOrderStatusChange(
-              order.id,
-              order.customerId,
-              order.orderNumber,
-              order.total,
-              editValues.status,
-              order.status
-            );
-          } catch (error) {
-            console.error('Balance update failed:', error);
-            // Continue with status update even if balance update fails
+        // Handle stock adjustments for status changes
+        if (editValues.status !== order.status) {
+          console.log('Processing stock adjustment for status change');
+          
+          // Handle stock management first
+          const stockResult = await handleOrderStatusChange(
+            order.id,
+            order.orderNumber,
+            order.items || [],
+            editValues.status,
+            order.status
+          );
+          
+          if (!stockResult.success) {
+            toast({
+              title: "Stock Update Failed",
+              description: stockResult.message,
+              variant: "destructive"
+            });
+            return;
+          }
+          
+          // Handle customer balance updates
+          if (order.customerId) {
+            try {
+              await updateBalanceForOrderStatusChange(
+                order.id,
+                order.customerId,
+                order.orderNumber,
+                order.total,
+                editValues.status,
+                order.status
+              );
+            } catch (error) {
+              console.error('Balance update failed:', error);
+              // Continue with status update even if balance update fails
+            }
           }
         }
         
+        // Update the order status via API
         const response = await salesApi.updateStatus(order.id, { status: editValues.status });
         console.log('Status update response:', response);
         
         if (response.success) {
           toast({
             title: "Status Updated",
-            description: "Order status has been updated successfully",
+            description: "Order status and stock have been updated successfully",
           });
         } else {
           throw new Error(response.message || 'Failed to update status');
@@ -149,7 +175,7 @@ export const OrderDetailsModal = ({ open, onOpenChange, order, onOrderUpdated }:
         if (result.success) {
           toast({
             title: "Payment Method Updated",
-            description: "Payment method and customer balance updated successfully",
+            description: "Payment method updated successfully",
           });
         } else {
           throw new Error(result.message || 'Failed to update payment method');

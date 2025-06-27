@@ -1,4 +1,3 @@
-
 import { inventoryApi, productsApi } from './api';
 import { useToast } from '@/hooks/use-toast';
 
@@ -35,9 +34,146 @@ export interface StockValidationResult {
   message: string;
 }
 
+export interface OrderStockAdjustment {
+  orderId: number;
+  orderNumber: string;
+  currentStatus: string;
+  lastAdjustedStatus: string;
+  stockAdjusted: boolean;
+  adjustmentTimestamp: string;
+}
+
 class StockManagementService {
   private movements: StockMovement[] = [];
   private alerts: StockAlert[] = [];
+  private orderAdjustments: Map<number, OrderStockAdjustment> = new Map();
+
+  // Track order stock adjustments to prevent duplicates
+  private trackOrderAdjustment(orderId: number, orderNumber: string, status: string) {
+    this.orderAdjustments.set(orderId, {
+      orderId,
+      orderNumber,
+      currentStatus: status,
+      lastAdjustedStatus: status,
+      stockAdjusted: true,
+      adjustmentTimestamp: new Date().toISOString()
+    });
+  }
+
+  // Check if order stock has already been adjusted for current status
+  private isStockAlreadyAdjusted(orderId: number, newStatus: string, oldStatus: string): boolean {
+    const adjustment = this.orderAdjustments.get(orderId);
+    if (!adjustment) return false;
+    
+    // If moving from completed to cancelled, check if we already adjusted for this transition
+    if (oldStatus === 'completed' && newStatus === 'cancelled') {
+      return adjustment.lastAdjustedStatus === 'cancelled' && adjustment.currentStatus === 'cancelled';
+    }
+    
+    // If moving from cancelled to completed, check if we already adjusted for this transition
+    if (oldStatus === 'cancelled' && newStatus === 'completed') {
+      return adjustment.lastAdjustedStatus === 'completed' && adjustment.currentStatus === 'completed';
+    }
+    
+    return false;
+  }
+
+  // Handle order status change with proper stock management
+  async handleOrderStatusChange(
+    orderId: number,
+    orderNumber: string,
+    orderItems: any[],
+    newStatus: string,
+    oldStatus: string
+  ): Promise<{ success: boolean; message: string }> {
+    try {
+      console.log(`Handling order status change for order ${orderNumber}: ${oldStatus} -> ${newStatus}`);
+      
+      // Check if stock adjustment is already done for this status change
+      if (this.isStockAlreadyAdjusted(orderId, newStatus, oldStatus)) {
+        console.log(`Stock already adjusted for order ${orderNumber} status change: ${oldStatus} -> ${newStatus}`);
+        return {
+          success: true,
+          message: 'Stock already adjusted for this status change'
+        };
+      }
+
+      // Handle different status transitions
+      if (oldStatus === 'pending' && newStatus === 'completed') {
+        // Deduct stock when order is completed
+        for (const item of orderItems) {
+          const result = await this.deductStock(
+            item.productId,
+            item.quantity,
+            orderId,
+            orderNumber
+          );
+          if (!result.success) {
+            return {
+              success: false,
+              message: `Failed to deduct stock for ${item.productName}: ${result.message}`
+            };
+          }
+        }
+        this.trackOrderAdjustment(orderId, orderNumber, 'completed');
+        
+      } else if (oldStatus === 'completed' && newStatus === 'cancelled') {
+        // Add stock back when completed order is cancelled
+        for (const item of orderItems) {
+          const result = await this.addStock(
+            item.productId,
+            item.quantity,
+            `Order ${orderNumber} cancelled - stock restored`,
+            orderNumber
+          );
+          if (!result.success) {
+            return {
+              success: false,
+              message: `Failed to restore stock for ${item.productName}: ${result.message}`
+            };
+          }
+        }
+        this.trackOrderAdjustment(orderId, orderNumber, 'cancelled');
+        
+      } else if (oldStatus === 'cancelled' && newStatus === 'completed') {
+        // Deduct stock when cancelled order is completed again
+        for (const item of orderItems) {
+          const result = await this.deductStock(
+            item.productId,
+            item.quantity,
+            orderId,
+            orderNumber
+          );
+          if (!result.success) {
+            return {
+              success: false,
+              message: `Failed to deduct stock for ${item.productName}: ${result.message}`
+            };
+          }
+        }
+        this.trackOrderAdjustment(orderId, orderNumber, 'completed');
+        
+      } else if (oldStatus === 'pending' && newStatus === 'cancelled') {
+        // No stock adjustment needed - stock was never deducted
+        this.trackOrderAdjustment(orderId, orderNumber, 'cancelled');
+        
+      } else {
+        console.log(`No stock adjustment needed for status change: ${oldStatus} -> ${newStatus}`);
+      }
+
+      return {
+        success: true,
+        message: 'Order status and stock updated successfully'
+      };
+      
+    } catch (error) {
+      console.error('Error handling order status change:', error);
+      return {
+        success: false,
+        message: 'Error updating stock for status change'
+      };
+    }
+  }
 
   // Validate stock availability before operations
   async validateStockAvailability(productId: number, requestedQuantity: number): Promise<StockValidationResult> {
