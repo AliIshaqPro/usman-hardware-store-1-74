@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,13 +10,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { Users, Search, Plus, Edit, CreditCard, Phone, MapPin, Calendar, Mail, Building, IdCard, Receipt, History, AlertCircle, Banknote, RefreshCw } from "lucide-react";
+import { Users, Search, Plus, Edit, CreditCard, Phone, MapPin, Calendar, Mail, Building, IdCard, Receipt, History, AlertCircle, Banknote, RefreshCw, Download } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { customersApi } from "@/services/api";
 import { CustomerEditModal } from "@/components/customers/CustomerEditModal";
 import { useCustomerBalance } from "@/hooks/useCustomerBalance";
 import { CustomerCards } from "@/components/customers/CustomerCards";
 import { CustomersPagination } from "@/components/customers/CustomersPagination";
+import { generateAllCustomersPDF } from "@/utils/allCustomersPdfGenerator";
 
 const Customers = () => {
   const { toast } = useToast();
@@ -242,18 +242,55 @@ const Customers = () => {
     );
   }
 
+  // Add export all customers function
+  const handleExportAllCustomers = async () => {
+    try {
+      if (customers.length === 0) {
+        toast({
+          title: "No Data",
+          description: "No customers available to export.",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      console.log('Exporting all customers:', customers.length);
+      generateAllCustomersPDF(customers);
+      
+      toast({
+        title: "Export Successful",
+        description: `All customers report has been downloaded with ${customers.length} customers.`,
+      });
+      
+    } catch (error) {
+      console.error('Failed to export all customers:', error);
+      toast({
+        title: "Export Failed",
+        description: "Failed to generate the customers report.",
+        variant: "destructive"
+      });
+    }
+  };
+
   return (
     <div className="flex-1 p-6 space-y-3 min-h-[calc(100vh-65px)] bg-background no-horizontal-scroll">
       {/* HEADER + ACTIONS */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div className="flex items-center gap-3">
-         
           <div>
             <h1 className="text-3xl font-bold text-foreground">Customer Management</h1>
             <p className="text-muted-foreground">Manage customer profiles, dues, and transactions</p>
           </div>
         </div>
         <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
+          <Button 
+            variant="outline" 
+            onClick={handleExportAllCustomers}
+            className="bg-purple-50 hover:bg-purple-100 text-purple-600 border-purple-200 w-full sm:w-auto"
+          >
+            <Download className="h-4 w-4 mr-2" />
+            Export All Customers
+          </Button>
           <Button 
             variant="outline" 
             onClick={handleSyncBalances}
