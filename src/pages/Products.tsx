@@ -615,7 +615,7 @@ const Products = () => {
             ) : (
               <FileText className="h-4 w-4 mr-2" />
             )}
-            {exportLoading ? 'Exporting...' : 'Enhanced Export'}
+            {exportLoading ? 'Exporting...' : 'Export Stock'}
           </Button>
 
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
