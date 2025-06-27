@@ -8,7 +8,7 @@ export const useStockManagement = () => {
   const [movements, setMovements] = useState<StockMovement[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Handle order status changes with proper stock management
+  // Handle order status changes - Let the API handle stock management
   const handleOrderStatusChange = async (
     orderId: number,
     orderNumber: string,
@@ -20,6 +20,8 @@ export const useStockManagement = () => {
       setLoading(true);
       console.log(`Processing order status change: ${oldStatus} -> ${newStatus} for order ${orderNumber}`);
       
+      // The API will handle stock adjustments automatically
+      // We just need to track that the adjustment was made
       const result = await stockManagementService.handleOrderStatusChange(
         orderId,
         orderNumber,
@@ -31,14 +33,14 @@ export const useStockManagement = () => {
       if (result.success) {
         toast({
           title: "Order Updated",
-          description: "Order status and stock updated successfully",
+          description: "Order status updated successfully",
         });
         
-        // Refresh alerts after stock change
+        // Refresh alerts after potential stock change
         await refreshAlerts();
       } else {
         toast({
-          title: "Stock Update Failed",
+          title: "Update Warning",
           description: result.message,
           variant: "destructive"
         });
@@ -49,10 +51,10 @@ export const useStockManagement = () => {
       console.error('Error handling order status change:', error);
       toast({
         title: "Error",
-        description: "Failed to update order status and stock",
+        description: "Failed to process order status change",
         variant: "destructive"
       });
-      return { success: false, message: 'Error updating order status and stock' };
+      return { success: false, message: 'Error updating order status' };
     } finally {
       setLoading(false);
     }
@@ -90,7 +92,6 @@ export const useStockManagement = () => {
           description: `Stock deducted successfully. New stock: ${result.newStock}`,
         });
         
-        // Refresh alerts after stock change
         await refreshAlerts();
       } else {
         toast({
@@ -131,7 +132,6 @@ export const useStockManagement = () => {
           description: `Stock added successfully. New stock: ${result.newStock}`,
         });
         
-        // Refresh alerts after stock change
         await refreshAlerts();
       } else {
         toast({
@@ -161,7 +161,6 @@ export const useStockManagement = () => {
       const newAlerts = await stockManagementService.checkStockAlerts();
       setAlerts(newAlerts);
       
-      // Show critical alerts as toasts
       newAlerts.forEach(alert => {
         if (alert.severity === 'critical') {
           toast({
@@ -225,7 +224,6 @@ export const useStockManagement = () => {
         });
       }
       
-      // Refresh alerts after bulk changes
       await refreshAlerts();
       
       return result;
@@ -251,7 +249,7 @@ export const useStockManagement = () => {
   useEffect(() => {
     const interval = setInterval(() => {
       setMovements(stockManagementService.getMovements());
-    }, 5000); // Update every 5 seconds
+    }, 5000);
 
     return () => clearInterval(interval);
   }, []);

@@ -1,4 +1,5 @@
-import { inventoryApi, productsApi } from './api';
+
+import { inventoryApi } from './api';
 import { useToast } from '@/hooks/use-toast';
 
 export interface StockMovement {
@@ -98,68 +99,11 @@ class StockManagementService {
         };
       }
 
-      // Handle different status transitions
-      if (oldStatus === 'pending' && newStatus === 'completed') {
-        // Deduct stock when order is completed
-        for (const item of orderItems) {
-          const result = await this.deductStock(
-            item.productId,
-            item.quantity,
-            orderId,
-            orderNumber
-          );
-          if (!result.success) {
-            return {
-              success: false,
-              message: `Failed to deduct stock for ${item.productName}: ${result.message}`
-            };
-          }
-        }
-        this.trackOrderAdjustment(orderId, orderNumber, 'completed');
-        
-      } else if (oldStatus === 'completed' && newStatus === 'cancelled') {
-        // Add stock back when completed order is cancelled
-        for (const item of orderItems) {
-          const result = await this.addStock(
-            item.productId,
-            item.quantity,
-            `Order ${orderNumber} cancelled - stock restored`,
-            orderNumber
-          );
-          if (!result.success) {
-            return {
-              success: false,
-              message: `Failed to restore stock for ${item.productName}: ${result.message}`
-            };
-          }
-        }
-        this.trackOrderAdjustment(orderId, orderNumber, 'cancelled');
-        
-      } else if (oldStatus === 'cancelled' && newStatus === 'completed') {
-        // Deduct stock when cancelled order is completed again
-        for (const item of orderItems) {
-          const result = await this.deductStock(
-            item.productId,
-            item.quantity,
-            orderId,
-            orderNumber
-          );
-          if (!result.success) {
-            return {
-              success: false,
-              message: `Failed to deduct stock for ${item.productName}: ${result.message}`
-            };
-          }
-        }
-        this.trackOrderAdjustment(orderId, orderNumber, 'completed');
-        
-      } else if (oldStatus === 'pending' && newStatus === 'cancelled') {
-        // No stock adjustment needed - stock was never deducted
-        this.trackOrderAdjustment(orderId, orderNumber, 'cancelled');
-        
-      } else {
-        console.log(`No stock adjustment needed for status change: ${oldStatus} -> ${newStatus}`);
-      }
+      // For completed to cancelled: stock will be restored by the API
+      // For cancelled to completed: stock will be deducted by the API
+      // The API handles stock management automatically based on status changes
+      
+      this.trackOrderAdjustment(orderId, orderNumber, newStatus);
 
       return {
         success: true,
@@ -178,9 +122,13 @@ class StockManagementService {
   // Validate stock availability before operations
   async validateStockAvailability(productId: number, requestedQuantity: number): Promise<StockValidationResult> {
     try {
-      const response = await productsApi.getById(productId);
+      // Get product details from API
+      const response = await fetch(`https://bagelegance.site/wp-json/ims/v1/products/${productId}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' }
+      });
       
-      if (!response.success || !response.data) {
+      if (!response.ok) {
         return {
           isValid: false,
           availableStock: 0,
@@ -189,7 +137,8 @@ class StockManagementService {
         };
       }
 
-      const product = response.data;
+      const result = await response.json();
+      const product = result.data || result;
       const availableStock = product.stock || 0;
 
       if (requestedQuantity <= availableStock) {
@@ -219,7 +168,7 @@ class StockManagementService {
     }
   }
 
-  // Deduct stock for sales
+  // Deduct stock for sales - Use inventory restock API with negative quantity
   async deductStock(
     productId: number, 
     quantity: number, 
@@ -237,36 +186,37 @@ class StockManagementService {
         };
       }
 
-      // Get current product details
-      const productResponse = await productsApi.getById(productId);
-      if (!productResponse.success || !productResponse.data) {
+      // Use inventory restock API with negative quantity to deduct stock
+      const response = await fetch('https://bagelegance.site/wp-json/ims/v1/inventory/restock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productId: productId,
+          quantity: -quantity, // Negative quantity to deduct
+          notes: `Stock deducted for sale${orderNumber ? ` - Order ${orderNumber}` : ''}`,
+          purchaseOrderId: orderId
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
         return {
           success: false,
-          message: 'Product not found'
+          message: errorData.message || 'Failed to deduct stock'
         };
       }
 
-      const product = productResponse.data;
-      const newStock = (product.stock || 0) - quantity;
-
-      // Update stock
-      const updateResponse = await productsApi.adjustStock(productId, {
-        type: 'sale',
-        quantity: -quantity,
-        reason: `Sale deduction${orderNumber ? ` - Order ${orderNumber}` : ''}`,
-        reference: orderNumber || `SALE-${Date.now()}`,
-        orderId
-      });
-
-      if (updateResponse.success) {
+      const result = await response.json();
+      
+      if (result.success) {
         // Record movement
         await this.recordMovement({
           productId,
-          productName: product.name,
+          productName: result.data?.productName || 'Unknown Product',
           type: 'sale',
           quantity: -quantity,
-          balanceBefore: product.stock || 0,
-          balanceAfter: newStock,
+          balanceBefore: validation.availableStock,
+          balanceAfter: validation.availableStock - quantity,
           reason: `Stock deducted for sale${orderNumber ? ` - Order ${orderNumber}` : ''}`,
           reference: orderNumber,
           orderId,
@@ -274,18 +224,15 @@ class StockManagementService {
           createdAt: new Date().toISOString()
         });
 
-        // Check for low stock alerts
-        await this.checkStockAlerts(productId);
-
         return {
           success: true,
           message: 'Stock deducted successfully',
-          newStock
+          newStock: validation.availableStock - quantity
         };
       } else {
         return {
           success: false,
-          message: 'Failed to update stock'
+          message: result.message || 'Failed to deduct stock'
         };
       }
     } catch (error) {
@@ -305,32 +252,37 @@ class StockManagementService {
     reference?: string
   ): Promise<{ success: boolean; message: string; newStock?: number }> {
     try {
-      const productResponse = await productsApi.getById(productId);
-      if (!productResponse.success || !productResponse.data) {
+      // Use inventory restock API
+      const response = await fetch('https://bagelegance.site/wp-json/ims/v1/inventory/restock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productId: productId,
+          quantity: quantity,
+          notes: reason
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
         return {
           success: false,
-          message: 'Product not found'
+          message: errorData.message || 'Failed to add stock'
         };
       }
 
-      const product = productResponse.data;
-      const newStock = (product.stock || 0) + quantity;
-
-      const updateResponse = await productsApi.adjustStock(productId, {
-        type: 'purchase',
-        quantity: quantity,
-        reason,
-        reference: reference || `ADD-${Date.now()}`
-      });
-
-      if (updateResponse.success) {
+      const result = await response.json();
+      
+      if (result.success) {
+        const newStock = result.data?.newStock || 0;
+        
         // Record movement
         await this.recordMovement({
           productId,
-          productName: product.name,
+          productName: result.data?.productName || 'Unknown Product',
           type: 'purchase',
           quantity: quantity,
-          balanceBefore: product.stock || 0,
+          balanceBefore: newStock - quantity,
           balanceAfter: newStock,
           reason,
           reference,
@@ -345,7 +297,7 @@ class StockManagementService {
       } else {
         return {
           success: false,
-          message: 'Failed to update stock'
+          message: result.message || 'Failed to add stock'
         };
       }
     } catch (error) {
@@ -417,9 +369,15 @@ class StockManagementService {
   // Get current stock level
   async getCurrentStock(productId: number): Promise<number> {
     try {
-      const response = await productsApi.getById(productId);
-      if (response.success && response.data) {
-        return response.data.stock || 0;
+      const response = await fetch(`https://bagelegance.site/wp-json/ims/v1/products/${productId}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        const product = result.data || result;
+        return product.stock || 0;
       }
       return 0;
     } catch (error) {
